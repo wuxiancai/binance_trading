@@ -5,7 +5,7 @@
 set -e  # 遇到错误立即退出
 
 # 配置变量
-PROJECT_NAME="binance_auto_trading"
+PROJECT_NAME="binance_trading"
 DEPLOY_USER="$(whoami)"
 DEPLOY_DIR="$HOME/${PROJECT_NAME}"
 SERVICE_NAME="${PROJECT_NAME}"
@@ -16,7 +16,7 @@ echo "=== 配置 systemd 服务 ==="
 echo "[1/3] 创建 systemd 服务文件..."
 sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null << EOF
 [Unit]
-Description=Binance Auto Trading Service
+Description=Binance Trading Service
 After=network.target
 Wants=network.target
 

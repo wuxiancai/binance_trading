@@ -2129,12 +2129,10 @@ def run_web():
 
     print("启动检查完成。")
     # 使用socketio.run启动应用，支持WebSocket
-<<<<<<< HEAD
     socketio.run(app, host=config.WEB_HOST, port=5000, debug=False)
-=======
+    
     # 添加allow_unsafe_werkzeug=True以支持生产环境部署
     socketio.run(app, host=config.WEB_HOST, port=config.WEB_PORT, debug=False, allow_unsafe_werkzeug=True)
->>>>>>> 7723a39d6b744b5c2458478aedd88d9ee1748bad
 
 
 if __name__ == "__main__":

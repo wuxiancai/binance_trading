@@ -13,7 +13,7 @@ fi
 
 DOMAIN_NAME="$1"
 EMAIL_ADDRESS="$2"
-PROJECT_NAME="binance_auto_trading"
+PROJECT_NAME="binance_trading"
 APP_PORT="5000"
 
 echo "=== NGINX 反向代理和 HTTPS 配置 ==="

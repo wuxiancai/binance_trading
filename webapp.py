@@ -2124,8 +2124,8 @@ def run_web():
 
     # 端口检查
     print("检查端口可用性...")
-    _ensure_port_free(5000)
-    print(f"端口 5000 已可用。")
+    _ensure_port_free(config.WEB_PORT)
+    print(f"端口 {config.WEB_PORT} 已可用。")
 
     print("启动检查完成。")
     # 使用socketio.run启动应用，支持WebSocket，添加allow_unsafe_werkzeug=True以支持生产环境部署

@@ -29,7 +29,7 @@ class Config:
 
     # Web 服务
     WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")
-    WEB_PORT: int = int(os.getenv("WEB_PORT", 5000))
+    WEB_PORT: int = int(os.getenv("WEB_PORT", 5001))
 
 
 config = Config()

@@ -674,50 +674,6 @@ TEMPLATE = """
       </div>
     </div>
 
-<<<<<<< HEAD
-    <!-- K线图和BOLL指标显示区域 -->
-    <div class="row g-3 mt-2">
-      <div class="col-12">
-        <div class="card">
-          <div class="card-header">
-            K线图 & BOLL指标
-            <div class="float-end">
-              <select id="klineLimit" class="form-select form-select-sm" style="width: auto; display: inline-block;">
-                <option value="50">50根K线</option>
-                <option value="100" selected>100根K线</option>
-                <option value="200">200根K线</option>
-                <option value="300">300根K线</option>
-              </select>
-            </div>
-          </div>
-          <div class="card-body">
-            <!-- 实时K线和BOLL数据显示区域 -->
-            <div id="realTimeData" class="real-time-data">
-              <span class="rt-item">实时币价: <span id="rtRealTimePrice" class="rt-value" style="color: blue; font-weight: bold;">--</span></span>
-              <span class="rt-separator">|</span>
-              <span class="rt-label">实时K线数据</span>
-              <span class="rt-item">开: <span id="rtOpen" class="rt-value">--</span></span>
-              <span class="rt-item">高: <span id="rtHigh" class="rt-value">--</span></span>
-              <span class="rt-item">低: <span id="rtLow" class="rt-value">--</span></span>
-              <span class="rt-item">收: <span id="rtClose" class="rt-value">--</span></span>
-              <span class="rt-separator">|</span>
-              <span class="rt-label">BOLL指标</span>
-              <span class="rt-item">UP: <span id="rtBollUpper" class="rt-value boll-upper">--</span></span>
-              <span class="rt-item">MB: <span id="rtBollMiddle" class="rt-value">--</span></span>
-              <span class="rt-item">DN: <span id="rtBollLower" class="rt-value boll-lower">--</span></span>
-            </div>
-          </div>
-            <div id="klineChart" style="height: 200px; position: relative;">
-              <canvas id="klineCanvas"></canvas>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-=======
->>>>>>> 7723a39d6b744b5c2458478aedd88d9ee1748bad
-
   </div>
 <script>
 // 改进的fetchJSON函数，增加错误处理和重试机制

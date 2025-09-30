@@ -2128,10 +2128,7 @@ def run_web():
     print(f"端口 5000 已可用。")
 
     print("启动检查完成。")
-    # 使用socketio.run启动应用，支持WebSocket
-    socketio.run(app, host=config.WEB_HOST, port=5000, debug=False)
-    
-    # 添加allow_unsafe_werkzeug=True以支持生产环境部署
+    # 使用socketio.run启动应用，支持WebSocket，添加allow_unsafe_werkzeug=True以支持生产环境部署
     socketio.run(app, host=config.WEB_HOST, port=config.WEB_PORT, debug=False, allow_unsafe_werkzeug=True)
 
 

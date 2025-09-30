@@ -213,17 +213,42 @@ class Trader:
             return []
         
         try:
+            log("INFO", "开始调用 Binance API 获取持仓信息...")
+            
+            # 尝试方法1：获取所有持仓信息
             positions = self.client.futures_position_information()
             if positions is None:
-                log("ERROR", "Failed to get positions: get_position_risk() returned None")
+                log("ERROR", "futures_position_information() returned None")
                 return []
+            
+            log("INFO", f"futures_position_information() 返回了 {len(positions)} 个交易对的持仓信息")
+            
+            # 如果返回空列表，尝试方法2：指定交易对
+            if len(positions) == 0:
+                log("INFO", f"尝试获取 {config.SYMBOL} 的特定持仓信息...")
+                try:
+                    btc_positions = self.client.futures_position_information(symbol=config.SYMBOL)
+                    log("INFO", f"futures_position_information(symbol={config.SYMBOL}) 返回了 {len(btc_positions) if btc_positions else 0} 个持仓")
+                    if btc_positions:
+                        positions = btc_positions
+                except Exception as e:
+                    log("ERROR", f"获取特定交易对持仓失败: {e}")
             
             # 只返回有持仓的交易对
             active_positions = []
-            for pos in positions:
+            for i, pos in enumerate(positions):
                 position_amt = float(pos.get('positionAmt', 0))
+                symbol = pos.get('symbol', 'Unknown')
+                
+                # 记录所有交易对的持仓情况（用于调试）
+                if i < 10:  # 记录前10个，用于调试
+                    log("DEBUG", f"交易对 {symbol}: positionAmt={position_amt}")
+                
                 if position_amt != 0:
+                    log("INFO", f"发现有持仓的交易对: {symbol}, 持仓数量: {position_amt}")
                     active_positions.append(pos)
+            
+            log("INFO", f"共找到 {len(active_positions)} 个有持仓的交易对")
             return active_positions
         except Exception as e:
             log("ERROR", f"Failed to get positions: {str(e)}")

@@ -2071,12 +2071,30 @@ def run_web():
     latest_time = latest_kline_time(config.SYMBOL, config.INTERVAL) or 0
     print(f"数据库中有 {kline_count} 条 {config.SYMBOL} {config.INTERVAL} 的 K 线数据，最新 open_time: {fmt_ts_utc8(latest_time)}。")
 
-    # 检查持仓
-    pos = get_position(config.SYMBOL)
-    if pos:
-        print(f"检测到持仓: {pos['side']} 数量 {pos['qty']} 入场价 {pos['entry_price']}。")
+    # 检查持仓 - 通过 API 获取实时持仓信息
+    print(f"开始检查持仓，目标交易对: {config.SYMBOL}")
+    api_positions = eng.trader.get_positions()
+    print(f"API 返回的持仓数据: {api_positions}")
+    print(f"持仓数据类型: {type(api_positions)}, 长度: {len(api_positions) if api_positions else 0}")
+    
+    if api_positions:
+        print(f"找到 {len(api_positions)} 个有持仓的交易对")
+        target_position = None
+        for i, pos in enumerate(api_positions):
+            print(f"持仓 {i+1}: {pos}")
+            if pos['symbol'] == config.SYMBOL:
+                target_position = pos
+                break
+        
+        if target_position:
+            position_amt = float(target_position.get('positionAmt', 0))
+            entry_price = float(target_position.get('entryPrice', 0))
+            side = 'long' if position_amt > 0 else 'short'
+            print(f"检测到 {config.SYMBOL} 持仓: {side} 数量 {abs(position_amt)} 入场价 {entry_price}。")
+        else:
+            print(f"在所有持仓中未找到 {config.SYMBOL} 的持仓。")
     else:
-        print("无当前持仓。")
+        print("API 返回空列表，无当前持仓。")
 
     # 端口检查
     print("检查端口可用性...")

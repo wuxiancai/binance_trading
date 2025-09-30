@@ -8,7 +8,7 @@ import pandas as pd
 import websockets
 
 from config import config
-from db import init_db, latest_kline_time, insert_kline, fetch_klines, log, get_position, get_daily_profit, update_daily_profit
+from db import init_db, latest_kline_time, insert_kline, fetch_klines, log, get_position, get_daily_profit, update_daily_profit, close_position
 from indicators import bollinger_bands, calculate_boll_binance_compatible, calculate_boll_dynamic
 from trader import Trader
 from datetime import datetime
@@ -29,7 +29,10 @@ class Engine:
         init_db()
         self.trader = Trader()
         self.initial_balance = self.trader.get_balance()
-        pos = get_position(config.SYMBOL)
+        
+        # 同步数据库持仓记录与 API 实际持仓
+        pos = self._sync_position_with_api()
+        
         self.initial_capital = self.initial_balance
         self.socketio = socketio  # 添加socketio支持
         
@@ -76,6 +79,54 @@ class Engine:
         elif pos and pos.get("side") == "short":
             self.state = self.STATE_HOLDING_SHORT
             log("INFO", f"恢复状态为 {self.state}（检测到空仓持仓）")
+    
+    def _sync_position_with_api(self):
+        """
+        同步数据库持仓记录与 API 实际持仓
+        返回同步后的持仓信息
+        """
+        # 获取数据库中的持仓记录
+        db_position = get_position(config.SYMBOL)
+        
+        # 获取 API 中的实际持仓
+        api_positions = self.trader.get_positions()
+        api_position = None
+        for pos in api_positions:
+            if pos.get('symbol') == config.SYMBOL and float(pos.get('positionAmt', 0)) != 0:
+                api_position = pos
+                break
+        
+        log("INFO", f"数据库持仓记录: {db_position}")
+        log("INFO", f"API 实际持仓: {api_position}")
+        
+        # 如果数据库有持仓记录但 API 没有持仓，清除数据库记录
+        if db_position and not api_position:
+            log("WARNING", f"数据库中有持仓记录但 API 无持仓，清除数据库记录: {db_position}")
+            close_position(config.SYMBOL)
+            return None
+        
+        # 如果 API 有持仓但数据库没有记录，这种情况暂时不处理（需要手动介入）
+        if api_position and not db_position:
+            log("WARNING", f"API 有持仓但数据库无记录，请手动检查: {api_position}")
+            # 这种情况比较复杂，因为我们不知道开仓价格和时间，暂时不自动处理
+            return None
+        
+        # 如果两边都有持仓，检查是否一致
+        if db_position and api_position:
+            db_side = db_position.get('side')
+            api_side = 'long' if float(api_position.get('positionAmt', 0)) > 0 else 'short'
+            
+            if db_side != api_side:
+                log("WARNING", f"数据库持仓方向({db_side})与 API 持仓方向({api_side})不一致，以 API 为准")
+                close_position(config.SYMBOL)
+                return None
+            else:
+                log("INFO", f"数据库持仓记录与 API 持仓一致: {db_side}")
+                return db_position
+        
+        # 如果两边都没有持仓
+        log("INFO", "数据库和 API 都无持仓记录")
+        return None
     
     def get_daily_initial_balance(self, date: str) -> float:
         """获取指定日期的初始余额，如果不存在则记录当前余额作为初始余额"""

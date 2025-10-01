@@ -1,19 +1,58 @@
 import numpy as np
 import pandas as pd
 import requests
+from config import config
 
 
-def bollinger_bands(df: pd.DataFrame, period: int = 20, stds: float = 2.0, ddof: int = 0):
-    # df columns: open_time, open, high, low, close, volume
-    close = df["close"].astype(float)
-    mid = close.rolling(window=period, min_periods=period).mean()
-    std = close.rolling(window=period, min_periods=period).std(ddof=ddof)
-    up = mid + stds * std
-    dn = mid - stds * std
+def get_boll_params(interval: str = None):
+    """
+    根据时间周期获取推荐的BOLL参数
+    
+    Args:
+        interval: 时间周期，如'1m', '5m', '15m', '1h', '4h', '1d'
+                 如果为None，使用配置文件中的默认周期
+    
+    Returns:
+        dict: 包含period和std的字典
+    """
+    if interval is None:
+        interval = config.INTERVAL
+    
+    # 从配置中获取推荐参数，如果没有则使用默认值
+    return config.BOLL_PARAMS.get(interval, {"period": config.BOLL_PERIOD, "std": config.BOLL_STD})
+
+
+def bollinger_bands(df: pd.DataFrame, period: int = 20, stds: float = 2.0, ddof: int = None):
+    """
+    计算布林带指标
+    
+    Args:
+        df: 包含价格数据的DataFrame，必须有'close'列
+        period: 移动平均周期，默认20
+        stds: 标准差倍数，默认2.0
+        ddof: 标准差计算的自由度调整，None=使用配置默认值，0=总体标准差，1=样本标准差
+    
+    Returns:
+        tuple: (中轨, 上轨, 下轨)
+    """
+    # 如果ddof为None，使用配置文件中的默认值
+    if ddof is None:
+        ddof = config.BOLL_DDOF
+    
+    # 计算移动平均线（中轨）
+    mid = df['close'].rolling(window=period).mean()
+    
+    # 计算标准差
+    std = df['close'].rolling(window=period).std(ddof=ddof)
+    
+    # 计算上轨和下轨
+    up = mid + (std * stds)
+    dn = mid - (std * stds)
+    
     return mid, up, dn
 
 
-def calculate_boll_binance_compatible(symbol, interval, period=21, std_mult=2.0):
+def calculate_boll_binance_compatible(symbol, interval, period=None, std_mult=None):
     """
     计算与币安兼容的BOLL值
     关键：不使用当前未完成的K线，避免实时价格波动导致的误差
@@ -21,12 +60,18 @@ def calculate_boll_binance_compatible(symbol, interval, period=21, std_mult=2.0)
     Args:
         symbol: 交易对符号
         interval: K线间隔
-        period: BOLL周期，默认21
-        std_mult: 标准差倍数，默认2.0
+        period: BOLL周期，None时使用推荐参数
+        std_mult: 标准差倍数，None时使用推荐参数
     
     Returns:
         dict: 包含up, mid, dn, last_complete_close等信息
     """
+    # 获取推荐的BOLL参数
+    boll_params = get_boll_params(interval)
+    if period is None:
+        period = boll_params["period"]
+    if std_mult is None:
+        std_mult = boll_params["std"]
     # 获取K线数据，多获取一些确保有足够的数据
     url = "https://api.binance.com/api/v3/klines"
     params = {
@@ -54,8 +99,8 @@ def calculate_boll_binance_compatible(symbol, interval, period=21, std_mult=2.0)
     if len(df_complete) < period:
         raise ValueError(f"数据不足，需要至少{period}根完整K线，当前只有{len(df_complete)}根")
     
-    # 计算BOLL，使用样本标准差（ddof=1）
-    mid, up, dn = bollinger_bands(df_complete, period, std_mult, ddof=1)
+    # 计算BOLL，使用总体标准差（ddof=0）以匹配币安官网标准
+    mid, up, dn = bollinger_bands(df_complete, period, std_mult, ddof=0)
     
     return {
         'up': up.iloc[-1],
@@ -67,7 +112,7 @@ def calculate_boll_binance_compatible(symbol, interval, period=21, std_mult=2.0)
     }
 
 
-def calculate_boll_dynamic(symbol, interval, period=21, std_mult=2.0):
+def calculate_boll_dynamic(symbol, interval, period=None, std_mult=None):
     """
     动态BOLL计算策略
     根据价格波动幅度选择最佳计算方法
@@ -75,12 +120,18 @@ def calculate_boll_dynamic(symbol, interval, period=21, std_mult=2.0):
     Args:
         symbol: 交易对符号
         interval: K线间隔
-        period: BOLL周期，默认21
-        std_mult: 标准差倍数，默认2.0
+        period: BOLL周期，None时使用推荐参数
+        std_mult: 标准差倍数，None时使用推荐参数
     
     Returns:
         dict: 包含up, mid, dn, method, price_change等信息
     """
+    # 获取推荐的BOLL参数
+    boll_params = get_boll_params(interval)
+    if period is None:
+        period = boll_params["period"]
+    if std_mult is None:
+        std_mult = boll_params["std"]
     # 获取当前价格
     price_url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
     price_response = requests.get(price_url)
@@ -111,28 +162,18 @@ def calculate_boll_dynamic(symbol, interval, period=21, std_mult=2.0):
     price_change = abs(current_price - last_close)
     price_change_pct = price_change / last_close * 100
     
-    # 根据价格变化幅度选择计算方法
-    if price_change_pct > 0.5:  # 价格变化超过0.5%，使用仅完整K线方法
-        df_calc = df.iloc[:-1]
-        method = "仅完整K线（大波动）"
-    elif price_change_pct > 0.1:  # 价格变化0.1%-0.5%，使用平均价格方法
-        df_calc = df.copy()
-        # 使用高低价和当前价的平均值
-        avg_price = (df_calc.loc[df_calc.index[-1], 'high'] + 
-                    df_calc.loc[df_calc.index[-1], 'low'] + current_price) / 3
-        df_calc.loc[df_calc.index[-1], 'close'] = avg_price
-        method = "平均价格（中等波动）"
-    else:  # 价格变化小于0.1%，使用实时价格方法
-        df_calc = df.copy()
-        df_calc.loc[df_calc.index[-1], 'close'] = current_price
-        method = "实时价格（小波动）"
+    # 简化实时价格处理逻辑，更接近币安官网标准
+    # 使用完整的历史K线数据 + 当前价格替换最后一根K线的收盘价
+    df_calc = df.copy()
+    df_calc.loc[df_calc.index[-1], 'close'] = current_price
+    method = "实时价格替换"
     
     # 确保有足够的数据
     if len(df_calc) < period:
         raise ValueError(f"数据不足，需要至少{period}根K线，当前只有{len(df_calc)}根")
     
-    # 计算BOLL
-    mid, up, dn = bollinger_bands(df_calc, period, std_mult, ddof=1)
+    # 计算BOLL，使用总体标准差（ddof=0）以匹配币安官网标准
+    mid, up, dn = bollinger_bands(df_calc, period, std_mult, ddof=0)
     
     return {
         'up': up.iloc[-1],

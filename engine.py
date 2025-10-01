@@ -325,7 +325,7 @@ class Engine:
                     return
                 df = pd.DataFrame(rows)
                 # 计算基于闭合 K 线的 BOLL，以匹配 Binance 显示
-                mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=1)
+                mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=0)
                 last_mid = float(mid.iloc[-1])
                 last_up = float(up.iloc[-1])
                 last_dn = float(dn.iloc[-1])

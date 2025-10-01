@@ -564,8 +564,8 @@ TEMPLATE = """
             K线图 & BOLL指标
             <div class="float-end">
               <select id="klineLimit" class="form-select form-select-sm" style="width: auto; display: inline-block;">
-                <option value="50">50根K线</option>
-                <option value="100" selected>100根K线</option>
+                <option value="50" selected>50根K线</option>
+                <option value="100">100根K线</option>
                 <option value="200">200根K线</option>
                 <option value="300">300根K线</option>
               </select>
@@ -1153,9 +1153,19 @@ async function updateKlineChart() {
     const limit = document.getElementById('klineLimit').value || 50;
     const data = await fetchJSON(`/api/kline_data?limit=${limit}`);
     
-    if (data && data.klines && data.boll && Array.isArray(data.klines) && Array.isArray(data.boll)) {
+    // 处理错误情况
+    if (data && data.error) {
+      console.error('K线数据获取错误:', data.error);
+      return;
+    }
+    
+    // 处理警告情况（有K线数据但没有BOLL数据）
+    if (data && data.warning) {
+      console.warn('K线数据警告:', data.warning);
+    }
+    
+    if (data && data.klines && Array.isArray(data.klines) && data.klines.length > 0) {
       klineData = data.klines;
-      const bollData = data.boll;
       
       // 准备蜡烛图数据
       const candlestickData = klineData.map(k => ({
@@ -1166,10 +1176,18 @@ async function updateKlineChart() {
         c: k.close
       }));
       
-      // 准备BOLL数据 - 使用时间戳作为x轴
-      const bollUpper = bollData.map(b => ({ x: b.time, y: b.upper }));
-      const bollMiddle = bollData.map(b => ({ x: b.time, y: b.middle }));
-      const bollLower = bollData.map(b => ({ x: b.time, y: b.lower }));
+      // 准备BOLL数据 - 如果有的话
+      let bollUpper = [];
+      let bollMiddle = [];
+      let bollLower = [];
+      let bollData = [];
+      
+      if (data.boll && Array.isArray(data.boll) && data.boll.length > 0) {
+        bollData = data.boll;
+        bollUpper = bollData.map(b => ({ x: b.time, y: b.upper }));
+        bollMiddle = bollData.map(b => ({ x: b.time, y: b.middle }));
+        bollLower = bollData.map(b => ({ x: b.time, y: b.lower }));
+      }
       
       // 更新图表数据
       if (klineChart) {
@@ -1183,7 +1201,7 @@ async function updateKlineChart() {
       // 更新实时数据显示
       updateRealTimeData(klineData, bollData);
     } else {
-      console.warn('K线数据或BOLL数据无效:', data);
+      console.warn('K线数据无效或为空:', data);
     }
   } catch (e) {
     console.error('获取K线数据失败:', e);
@@ -1625,7 +1643,7 @@ def api_price_and_boll():
                     df.loc[df.index[-1], 'low'] = min(df.iloc[-1]['low'], current_price)
                 
                 # 计算实时 BOLL 指标
-                mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=1)
+                mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=0)
                 
                 return jsonify({
                     'price': current_price,
@@ -1648,7 +1666,7 @@ def api_price_and_boll():
         
         # 计算 BOLL 指标
         df = pd.DataFrame(rows)
-        mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=1)
+        mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=0)
         price = float(df['close'].iloc[-1])
         
         return jsonify({
@@ -1683,7 +1701,7 @@ def api_current_boll():
                     df.loc[df.index[-1], 'low'] = min(df.iloc[-1]['low'], current_price)
                 
                 # 计算实时 BOLL 指标
-                mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=1)
+                mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=0)
                 
                 return jsonify({
                     'upper': float(up.iloc[-1]),
@@ -1700,7 +1718,7 @@ def api_current_boll():
             return jsonify({'error': 'K线数据不足'}), 400
         
         df = pd.DataFrame(rows)
-        mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=1)
+        mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=0)
         
         return jsonify({
             'upper': float(up.iloc[-1]),
@@ -1888,22 +1906,45 @@ def api_balance():
 def api_kline_data():
     """获取 K 线数据和 BOLL 指标用于图表显示"""
     try:
-        # 获取参数，默认返回最近100条K线数据
-        limit = int(request.args.get('limit', 100))
+        # 获取参数，默认返回最近50条K线数据
+        limit = int(request.args.get('limit', 50))
         limit = min(limit, 500)  # 限制最大数量
         
-        # 获取K线数据
+        # 获取K线数据，先尝试获取足够的数据来计算BOLL
         rows = fetch_klines(config.SYMBOL, limit=limit + config.BOLL_PERIOD)
+        
+        # 如果数据不足以计算BOLL指标，但有一些K线数据，则返回K线数据但不返回BOLL
         if len(rows) < config.BOLL_PERIOD:
-            return jsonify({
-                'klines': [],
-                'boll': [],
-                'error': 'K线数据不足'
-            })
+            if len(rows) == 0:
+                return jsonify({
+                    'klines': [],
+                    'boll': [],
+                    'error': 'K线数据不足，请等待系统获取更多数据'
+                })
+            else:
+                # 返回现有的K线数据，但不计算BOLL
+                klines = []
+                for row in rows[-limit:]:  # 只返回最近limit条
+                    klines.append({
+                        'time': int(row['open_time']),
+                        'open': float(row['open']),
+                        'high': float(row['high']),
+                        'low': float(row['low']),
+                        'close': float(row['close']),
+                        'volume': float(row['volume'])
+                    })
+                
+                return jsonify({
+                    'klines': klines,
+                    'boll': [],
+                    'symbol': config.SYMBOL,
+                    'interval': config.INTERVAL,
+                    'warning': f'K线数据不足以计算BOLL指标（需要{config.BOLL_PERIOD}条，当前{len(rows)}条）'
+                })
         
         # 转换为DataFrame计算BOLL指标
         df = pd.DataFrame(rows)
-        mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=1)
+        mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=0)
         
         # 只返回最近limit条数据
         df_display = df.tail(limit).copy()
@@ -1963,7 +2004,7 @@ def api_realtime_boll():
         
         # 转换为DataFrame计算BOLL指标
         df = pd.DataFrame(rows)
-        mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=1)
+        mid, up, dn = bollinger_bands(df, config.BOLL_PERIOD, config.BOLL_STD, ddof=0)
         
         # 获取最新的BOLL值
         latest_boll = {

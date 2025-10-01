@@ -4,9 +4,23 @@ class Config:
     # 基本设置
     SYMBOL: str = os.getenv("SYMBOL", "BTCUSDT")
     INTERVAL: str = os.getenv("INTERVAL", "15m")  # K线时间周期
-    BOLL_PERIOD: int = int(os.getenv("BOLL_PERIOD", 26))
-    BOLL_STD: float = float(os.getenv("BOLL_STD", 2.5))
-    INITIAL_KLINES: int = int(os.getenv("INITIAL_KLINES", 50))
+    BOLL_PERIOD: int = int(os.getenv("BOLL_PERIOD", 20))
+    BOLL_STD: float = float(os.getenv("BOLL_STD", 2.0))
+    INITIAL_KLINES: int = int(os.getenv("INITIAL_KLINES", 100))
+    
+    # BOLL指标配置 - 支持不同时间周期的标准参数
+    # 标准差计算方法：0=总体标准差（币安标准），1=样本标准差
+    BOLL_DDOF: int = int(os.getenv("BOLL_DDOF", 0))
+    
+    # 不同时间周期的推荐BOLL参数
+    BOLL_PARAMS = {
+        "1m": {"period": 20, "std": 2.0},    # 1分钟：标准参数
+        "5m": {"period": 20, "std": 2.0},    # 5分钟：标准参数
+        "15m": {"period": 20, "std": 2.0},   # 15分钟：标准参数
+        "1h": {"period": 20, "std": 2.0},    # 1小时：标准参数
+        "4h": {"period": 20, "std": 2.0},    # 4小时：标准参数
+        "1d": {"period": 20, "std": 2.0},    # 1天：标准参数
+    }
 
     # 交易相关
     DEFAULT_MARGIN: float = 1000.0  # 模拟默认保证金余额 USDT

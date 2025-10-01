@@ -1,6 +1,9 @@
 import asyncio
 import time
+import requests
 from typing import Optional, Dict, Any
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from config import config
 from db import add_trade, set_position, get_position, close_position, log
@@ -16,18 +19,68 @@ except ImportError:
 
 class Trader:
     def __init__(self):
-        self.client = None
-        self.dual_side_position = False  # 是否支持双向持仓
-        if UMFutures is not None and config.API_KEY:
-            if config.USE_TESTNET:
-                # 对于测试网，需要使用不同的初始化方式
-                self.client = UMFutures(api_key=config.API_KEY, api_secret=config.API_SECRET, testnet=True)
-            else:
-                # 对于主网，使用默认初始化
-                self.client = UMFutures(api_key=config.API_KEY, api_secret=config.API_SECRET)
+        """初始化交易器"""
+        if UMFutures is None:
+            log("ERROR", "Binance library not found. Please install python-binance")
+            self.client = None
+            return
+        
+        try:
+            # 初始化Binance客户端，使用基本配置
+            self.client = UMFutures(
+                api_key=config.API_KEY, 
+                api_secret=config.API_SECRET,
+                requests_params={
+                    'timeout': 30  # 请求超时时间
+                }
+            )
             
-            # 尝试开启双向持仓模式
+            # 尝试备用API端点（如果主端点连接失败）
+            self._try_alternative_endpoints()
+            
             self._setup_dual_side_position()
+            log("INFO", "Binance futures client initialized successfully with optimized network settings")
+        except Exception as e:
+            log("ERROR", f"Failed to initialize Binance client: {str(e)}")
+            self.client = None
+        
+        # 添加持仓状态缓存，用于避免重复日志
+        self._last_positions_hash = None
+        self._last_log_time = 0
+        self._log_interval = 60  # 最少60秒才记录一次详细日志
+
+    def _try_alternative_endpoints(self):
+        """尝试备用API端点"""
+        try:
+            # 测试连接到主API端点
+            response = requests.get("https://fapi.binance.com/fapi/v1/ping", timeout=10)
+            if response.status_code == 200:
+                log("INFO", "主API端点连接正常")
+                return
+        except Exception as e:
+            log("WARNING", f"主API端点连接失败: {e}")
+        
+        # 如果主端点失败，尝试备用端点
+        alternative_endpoints = [
+            "https://fapi1.binance.com",
+            "https://fapi2.binance.com", 
+            "https://fapi3.binance.com"
+        ]
+        
+        for endpoint in alternative_endpoints:
+            try:
+                response = requests.get(f"{endpoint}/fapi/v1/ping", timeout=10)
+                if response.status_code == 200:
+                    log("INFO", f"备用API端点 {endpoint} 连接成功")
+                    # 更新客户端的base_url（如果支持的话）
+                    if hasattr(self.client, 'API_URL'):
+                        self.client.API_URL = endpoint
+                    return
+            except Exception as e:
+                log("WARNING", f"备用API端点 {endpoint} 连接失败: {e}")
+                continue
+        
+        log("ERROR", "所有API端点连接失败，网络可能存在问题")
 
     def _setup_dual_side_position(self):
         """设置双向持仓模式"""
@@ -177,79 +230,171 @@ class Trader:
             return 0.0
 
     def get_balance(self) -> float:
+        """获取账户余额，带重试机制"""
         if self.client is None:
             log("ERROR", "Binance client not initialized")
             return 0.0
-        try:
-            # 使用futures_account()方法获取账户信息，包含可用余额
-            account_info = self.client.futures_account()
-            if account_info is None:
-                log("ERROR", "Failed to get account info: futures_account() returned None")
-                return 0.0
-            
-            # 获取各种余额信息
-            available_balance = float(account_info.get('availableBalance', 0))
-            wallet_balance = float(account_info.get('totalWalletBalance', 0))
-            unrealized_pnl = float(account_info.get('totalUnrealizedProfit', 0))
-            
-            # 详细记录余额信息
-            #log("INFO", f"余额详情 - 钱包总余额: {wallet_balance:.2f}, 可用余额: {available_balance:.2f}, 未实现盈亏: {unrealized_pnl:.2f}")
-            
-            if available_balance <= 0:
-                log("WARNING", f"Available balance is {available_balance}, using wallet balance as fallback")
-                return wallet_balance
-            
-            # 使用可用余额进行交易
-            #log("INFO", f"使用可用余额进行交易: {available_balance:.2f} USDT")
-            return available_balance
-        except Exception as e:
-            log("ERROR", f"Failed to get balance: {str(e)}")
-            return 0.0
+        
+        max_retries = 3
+        retry_delay = 2  # 秒
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    log("INFO", f"重试获取余额信息 (第 {attempt + 1} 次尝试)...")
+                
+                # 使用futures_account()方法获取账户信息，包含可用余额
+                account_info = self.client.futures_account()
+                if account_info is None:
+                    log("ERROR", "Failed to get account info: futures_account() returned None")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    return 0.0
+                
+                # 获取各种余额信息
+                available_balance = float(account_info.get('availableBalance', 0))
+                wallet_balance = float(account_info.get('totalWalletBalance', 0))
+                unrealized_pnl = float(account_info.get('totalUnrealizedProfit', 0))
+                
+                # 详细记录余额信息
+                #log("INFO", f"余额详情 - 钱包总余额: {wallet_balance:.2f}, 可用余额: {available_balance:.2f}, 未实现盈亏: {unrealized_pnl:.2f}")
+                
+                if available_balance <= 0:
+                    log("WARNING", f"Available balance is {available_balance}, using wallet balance as fallback")
+                    return wallet_balance
+                
+                # 使用可用余额进行交易
+                #log("INFO", f"使用可用余额进行交易: {available_balance:.2f} USDT")
+                return available_balance
+                
+            except requests.exceptions.Timeout as e:
+                log("ERROR", f"获取余额网络超时 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+            except requests.exceptions.ConnectionError as e:
+                log("ERROR", f"获取余额网络连接错误 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+            except requests.exceptions.SSLError as e:
+                log("ERROR", f"获取余额SSL连接错误 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+            except Exception as e:
+                error_msg = str(e)
+                if "HTTPSConnectionPool" in error_msg or "timeout" in error_msg.lower():
+                    log("ERROR", f"获取余额网络连接问题 (尝试 {attempt + 1}/{max_retries}): {error_msg}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay * (attempt + 1))
+                        continue
+                else:
+                    log("ERROR", f"获取余额失败: {error_msg}")
+                    break
+        
+        log("ERROR", f"获取余额失败，已重试 {max_retries} 次")
+        return 0.0
 
     def get_positions(self):
-        """获取实际持仓信息"""
+        """获取实际持仓信息，带重试机制"""
         if self.client is None:
             log("ERROR", "Binance client not initialized")
             return []
         
-        try:
-            log("INFO", "开始调用 Binance API 获取持仓信息...")
-            
-            # 尝试方法1：获取所有持仓信息
-            positions = self.client.futures_position_information()
-            if positions is None:
-                log("ERROR", "futures_position_information() returned None")
-                return []
-            
-            log("INFO", f"futures_position_information() 返回了 {len(positions)} 个交易对的持仓信息")
-            
-            # 如果返回空列表，尝试方法2：指定交易对
-            if len(positions) == 0:
-                log("INFO", f"尝试获取 {config.SYMBOL} 的特定持仓信息...")
-                try:
-                    btc_positions = self.client.futures_position_information(symbol=config.SYMBOL)
-                    log("INFO", f"futures_position_information(symbol={config.SYMBOL}) 返回了 {len(btc_positions) if btc_positions else 0} 个持仓")
-                    if btc_positions:
-                        positions = btc_positions
-                except Exception as e:
-                    log("ERROR", f"获取特定交易对持仓失败: {e}")
-            
-            # 只返回有持仓的交易对
-            active_positions = []
-            for i, pos in enumerate(positions):
-                position_amt = float(pos.get('positionAmt', 0))
-                symbol = pos.get('symbol', 'Unknown')
+        max_retries = 3
+        retry_delay = 2  # 秒
+        
+        for attempt in range(max_retries):
+            try:
+                current_time = time.time()
+                should_log_details = (current_time - self._last_log_time) > self._log_interval
                 
-                # 记录所有交易对的持仓情况（用于调试）
-                if i < 10:  # 记录前10个，用于调试
-                    log("DEBUG", f"交易对 {symbol}: positionAmt={position_amt}")
+                if should_log_details and attempt == 0:
+                    log("INFO", "开始调用 Binance API 获取持仓信息...")
+                elif attempt > 0:
+                    log("INFO", f"重试获取持仓信息 (第 {attempt + 1} 次尝试)...")
                 
-                if position_amt != 0:
-                    log("INFO", f"发现有持仓的交易对: {symbol}, 持仓数量: {position_amt}")
-                    active_positions.append(pos)
-            
-            log("INFO", f"共找到 {len(active_positions)} 个有持仓的交易对")
-            return active_positions
-        except Exception as e:
-            log("ERROR", f"Failed to get positions: {str(e)}")
-            return []
+                # 尝试方法1：获取所有持仓信息
+                positions = self.client.futures_position_information()
+                if positions is None:
+                    log("ERROR", "futures_position_information() returned None")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    return []
+                
+                if should_log_details:
+                    log("INFO", f"futures_position_information() 返回了 {len(positions)} 个交易对的持仓信息")
+                
+                # 如果返回空列表，尝试方法2：指定交易对
+                if len(positions) == 0:
+                    if should_log_details:
+                        log("INFO", f"尝试获取 {config.SYMBOL} 的特定持仓信息...")
+                    try:
+                        btc_positions = self.client.futures_position_information(symbol=config.SYMBOL)
+                        if should_log_details:
+                            log("INFO", f"futures_position_information(symbol={config.SYMBOL}) 返回了 {len(btc_positions) if btc_positions else 0} 个持仓")
+                        if btc_positions:
+                            positions = btc_positions
+                    except Exception as e:
+                        log("ERROR", f"获取特定交易对持仓失败: {e}")
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
+                            continue
+                
+                # 只返回有持仓的交易对
+                active_positions = []
+                for i, pos in enumerate(positions):
+                    position_amt = float(pos.get('positionAmt', 0))
+                    symbol = pos.get('symbol', 'Unknown')
+                    
+                    # 记录所有交易对的持仓情况（用于调试）
+                    if should_log_details and i < 10:  # 记录前10个，用于调试
+                        log("DEBUG", f"交易对 {symbol}: positionAmt={position_amt}")
+                    
+                    if position_amt != 0:
+                        # 有持仓的情况总是记录，因为这是重要信息
+                        log("INFO", f"发现有持仓的交易对: {symbol}, 持仓数量: {position_amt}")
+                        active_positions.append(pos)
+                
+                # 计算当前持仓状态的哈希值，用于检测变化
+                positions_hash = hash(str([(pos.get('symbol'), float(pos.get('positionAmt', 0))) for pos in active_positions]))
+                
+                # 如果持仓状态发生变化或者距离上次详细日志超过间隔时间，记录详细信息
+                if positions_hash != self._last_positions_hash or should_log_details:
+                    log("INFO", f"共找到 {len(active_positions)} 个有持仓的交易对")
+                    self._last_positions_hash = positions_hash
+                    self._last_log_time = current_time
+                
+                return active_positions
+                
+            except requests.exceptions.Timeout as e:
+                log("ERROR", f"网络超时 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))  # 递增延迟
+                    continue
+            except requests.exceptions.ConnectionError as e:
+                log("ERROR", f"网络连接错误 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+            except requests.exceptions.SSLError as e:
+                log("ERROR", f"SSL连接错误 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+            except Exception as e:
+                error_msg = str(e)
+                if "HTTPSConnectionPool" in error_msg or "timeout" in error_msg.lower():
+                    log("ERROR", f"网络连接问题 (尝试 {attempt + 1}/{max_retries}): {error_msg}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay * (attempt + 1))
+                        continue
+                else:
+                    log("ERROR", f"获取持仓失败: {error_msg}")
+                    break
+        
+        log("ERROR", f"获取持仓信息失败，已重试 {max_retries} 次")
+        return []
